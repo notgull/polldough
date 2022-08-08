@@ -1,19 +1,45 @@
 // GNU GPL v3 License
 
 #[cfg(unix)]
-pub use std::os::raw::unix::io::{AsRawFd as _, RawFd as Raw};
+pub use std::os::unix::io::{AsRawFd as _, RawFd as Raw};
 #[cfg(windows)]
 pub use std::os::windows::io::{AsRawHandle as _, AsRawSocket as _, RawHandle as Raw};
 #[cfg(not(any(unix, windows)))]
 compile_error! { "Unsupported platform" }
 
 /// A wrapper around a system-specific file descriptor.
+///
+/// # Safety
+///
+/// - The raw file descriptor returned must be a valid
+///   file descriptor.
+/// - `SOURCE_TYPE` must accurately describe the source.
 pub unsafe trait Source {
     /// The type of the system-specific file descriptor.
     const SOURCE_TYPE: SourceType;
 
     /// Get the raw underlying file descriptor.
     fn as_raw(&self) -> Raw;
+}
+
+/// A type that derefs into a specific `Source`.
+///
+/// This allows users to create `Source`s that wrap around
+/// other `Source`s without using unsafe code.
+pub trait AsSource {
+    /// The source type.
+    type Source: Source;
+
+    /// Get the source.
+    fn source(&self) -> &Self::Source;
+}
+
+unsafe impl<T: AsSource> Source for T {
+    const SOURCE_TYPE: SourceType = T::Source::SOURCE_TYPE;
+
+    fn as_raw(&self) -> Raw {
+        self.source().as_raw()
+    }
 }
 
 /// Is this source a socket or a file?
