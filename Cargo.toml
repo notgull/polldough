@@ -1,0 +1,11 @@
+[package]
+name = "polldough"
+version = "0.1.0"
+edition = "2018"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.36.1"
+features = ["Win32_Foundation", "Win32_System_IO"]
+
+[dependencies]
+cfg-if = "1.0.0"
