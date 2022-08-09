@@ -54,8 +54,8 @@ cfg_if::cfg_if! {
 mod source;
 pub use source::{Raw, Source, SourceType};
 
-use std::{fmt, io::Result, time::Duration};
 use ops::Op;
+use std::{fmt, io::Result, time::Duration};
 
 #[doc(hidden)]
 pub use platform::OpData;
@@ -98,9 +98,9 @@ impl Completion {
     }
 
     /// Submit an operation to the completion queue.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// Cannot submit the same `op` more than once.
     pub unsafe fn submit(&self, op: &mut impl Op, key: u64) -> Result<()> {
         self.inner.submit(op, key)
@@ -120,6 +120,6 @@ impl Completion {
 
 impl From<platform::Completion> for Completion {
     fn from(inner: platform::Completion) -> Self {
-        Completion { inner } 
+        Completion { inner }
     }
 }

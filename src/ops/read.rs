@@ -14,7 +14,7 @@ use windows_sys::Win32::{
 /// Read in data from a source to a buffer.
 pub struct Read<B> {
     source: Raw,
-    ty: SourceType,
+    variant: SourceType,
     buf: B,
     offset: i64,
 }
@@ -24,7 +24,7 @@ impl<B: BufMut> Read<B> {
     pub fn new<S: Source>(source: &S, buf: B) -> Self {
         Read {
             source: source.as_raw(),
-            ty: S::SOURCE_TYPE,
+            variant: S::SOURCE_TYPE,
             buf,
             offset: 0,
         }
@@ -57,7 +57,7 @@ impl<B: BufMut> Read<B> {
         let ptr = super::TsPtr(ptr);
 
         // if we're a file, use seeking
-        match self.ty {
+        match self.variant {
             SourceType::File => Box::new(move || {
                 if !seeked {
                     syscall!(lseek(source, offset, libc::SEEK_SET))?;
@@ -86,7 +86,7 @@ impl<B: BufMut> Read<B> {
         let (ptr, len) = split_nonnull(self.buf.pointer());
         let mut read = io_uring::opcode::Read::new(Fd(self.source), ptr.as_ptr().cast(), len as _);
 
-        if matches!(self.ty, SourceType::File) {
+        if matches!(self.variant, SourceType::File) {
             read = read.offset(self.offset);
         }
 
@@ -98,7 +98,7 @@ impl<B: BufMut> Read<B> {
         use std::mem::MaybeUninit;
 
         let (ptr, len) = split_nonnull(self.buf.pointer());
-        match self.ty {
+        match self.variant {
             SourceType::Socket => {
                 let buf = WSABUF {
                     len: len as _,

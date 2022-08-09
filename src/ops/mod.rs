@@ -1,6 +1,6 @@
 // GNU GPL v3 License
 
-use crate::{OpData, Raw};
+use crate::{OpData, Raw, SourceType};
 use std::{io::Result, ptr::NonNull};
 
 /// The hidden underlying trait for `Op` that is used to not expose OS-specific
@@ -16,6 +16,8 @@ pub trait OpBase {
 pub trait Op: OpBase {
     /// The raw file descriptor that this operation is associated with.
     fn source(&self) -> Raw;
+    /// The variant of the source.
+    fn variant(&self) -> SourceType;
 }
 
 // split a NonNull<[u8]> into ptr and len
@@ -69,6 +71,10 @@ macro_rules! impl_op {
         impl<$($gname: $gbound),*> $crate::ops::Op for $name<$($gname),*> {
             fn source(&self) -> $crate::Raw {
                 self.source
+            }
+
+            fn variant(&self) -> $crate::SourceType {
+                self.variant
             }
         }
 
