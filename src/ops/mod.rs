@@ -43,7 +43,7 @@ macro_rules! check_socket_error {
 
         if ($res) == SOCKET_ERROR {
             let err = unsafe { WSAGetLastError() };
-            if err != ERROR_IO_PENDING {
+            if err != ERROR_IO_PENDING as _ {
                 return Err(Error::last_os_error());
             }
         }

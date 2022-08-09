@@ -102,7 +102,7 @@ impl<B: BufMut> Read<B> {
             SourceType::Socket => {
                 let buf = WSABUF {
                     len: len as _,
-                    buf: ptr as _,
+                    buf: ptr.as_ptr() as _,
                 };
                 let mut recv_bytes = 0;
                 let mut flags = 0;
@@ -124,8 +124,8 @@ impl<B: BufMut> Read<B> {
 
                 check_win32_error!(unsafe {
                     windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        self.source,
-                        ptr as _,
+                        self.source as _,
+                        ptr.as_ptr() as _,
                         len as _,
                         &mut recv_bytes,
                         overlapped,
