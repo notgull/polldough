@@ -2,7 +2,7 @@
 
 #![cfg(unix)]
 
-use crate::{ops::Op, Event, PollingFn, Raw, Source, SourceType};
+use crate::{ops::Op, Event, PollingFn, Raw, Source, SourceType, SubmissionStatus};
 use polling::{Event as PollEvent, Poller};
 use slab::Slab;
 use std::{
@@ -10,9 +10,7 @@ use std::{
     fmt,
     io::{self, Result},
     marker::PhantomData,
-    os::unix::prelude::RawFd,
     sync::Mutex,
-    task::Poll,
     time::Duration,
 };
 
@@ -34,8 +32,6 @@ pub(crate) struct Completion {
     event_buffer: Mutex<Vec<PollEvent>>,
     /// The list of sources we have to mind.
     sources: Mutex<Sources>,
-    /// Deferred events that succeeded on the first try.
-    deferred: Mutex<Vec<Event>>,
 }
 
 #[derive(Debug)]
@@ -88,7 +84,6 @@ impl Completion {
                 sources: Slab::new(),
                 fd_to_key: HashMap::new(),
             }),
-            deferred: Mutex::new(vec![]),
         })
     }
 
@@ -127,18 +122,9 @@ impl Completion {
         Ok(())
     }
 
-    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<()> {
-        let mut sources = lock!(self.sources);
-
-        // get the source entry for the raw FD
-        let raw = op.source();
-        let poll_key = *sources
-            .fd_to_key
-            .get(&raw)
-            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        let entry = sources.sources.get_mut(poll_key).unwrap();
-
+    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<SubmissionStatus> {
         // populate an OpData structure
+        #[allow(unused_mut)]
         let mut op_data = OpData {
             slot: None,
             read: false,
@@ -189,17 +175,20 @@ impl Completion {
         match (new_op.poll)() {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
             result => {
-                // it successfully resolved on the first try
-                // so we don't need to register the source for polling
-                let mut deferred = lock!(self.deferred);
-                deferred.push(Event { key, result });
-
-                // notify the poller that we may already have new events
-                self.poller.notify()?;
-
-                return Ok(());
+                // we're already complete
+                return Ok(SubmissionStatus::AlreadyComplete(result));
             }
         }
+
+        let mut sources = lock!(self.sources);
+
+        // get the source entry for the raw FD
+        let raw = op.source();
+        let poll_key = *sources
+            .fd_to_key
+            .get(&raw)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        let entry = sources.sources.get_mut(poll_key).unwrap();
 
         // add the operation to the source entry
         let mut register = false;
@@ -226,7 +215,7 @@ impl Completion {
 
         entry.operations.push(new_op);
 
-        Ok(())
+        Ok(SubmissionStatus::Submitted)
     }
 
     pub(crate) fn wait(&self, timeout: Option<Duration>, out: &mut Vec<Event>) -> Result<usize> {
@@ -282,24 +271,10 @@ impl Completion {
             }
         }
 
-        // see if we had any deferred events while waiting
-        num_events += self.try_deferred_events(out);
-
         Ok(num_events)
     }
 
     pub(crate) fn notify(&self) -> Result<()> {
         self.poller.notify()
-    }
-
-    fn try_deferred_events(&self, out: &mut Vec<Event>) -> usize {
-        let mut deferred = lock!(self.deferred);
-        if deferred.is_empty() {
-            return 0;
-        }
-
-        let num_events = deferred.len();
-        out.append(&mut deferred);
-        num_events
     }
 }

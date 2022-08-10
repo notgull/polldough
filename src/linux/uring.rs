@@ -1,9 +1,8 @@
 // GNU GPL v3 License
 
-use crate::{ops::Op, Event, Raw, Source};
+use crate::{ops::Op, Event, Raw, Source, SubmissionStatus};
 use io_uring::{
     cqueue::Entry as CEvent,
-    squeue::Entry as SEvent,
     types::{Fd, SubmitArgs, Timespec},
     IoUring,
 };
@@ -49,6 +48,9 @@ pub(crate) struct Completion {
     notified: AtomicBool,
 }
 
+unsafe impl Send for Completion {}
+unsafe impl Sync for Completion {}
+
 impl fmt::Debug for Completion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Completion")
@@ -86,7 +88,7 @@ impl Completion {
         Ok(())
     }
 
-    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<()> {
+    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<SubmissionStatus> {
         // feed it an OpData and see if it produces an SEvent
         let mut opdata = super::OpData::Entry(None);
         op.run(&mut opdata)?;
@@ -113,7 +115,7 @@ impl Completion {
                 .map_err(|err| io::Error::new(io::ErrorKind::OutOfMemory, err))?;
         }
 
-        Ok(())
+        Ok(SubmissionStatus::Submitted)
     }
 
     pub(crate) fn wait(&self, timeout: Option<Duration>, out: &mut Vec<Event>) -> Result<usize> {
@@ -202,5 +204,12 @@ impl Completion {
         }
 
         Ok(())
+    }
+}
+
+impl Drop for Completion {
+    fn drop(&mut self) {
+        // close the event fd
+        let _ = syscall!(close(self.wakeup_fd));
     }
 }

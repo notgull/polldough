@@ -43,11 +43,17 @@ macro_rules! check_socket_error {
             System::IO::OVERLAPPED,
         };
 
-        if ($res) == SOCKET_ERROR {
-            let err = unsafe { WSAGetLastError() };
-            if err != ERROR_IO_PENDING as _ {
-                return Err(Error::last_os_error());
+        let res = ($res);
+
+        if res == SOCKET_ERROR {
+            let err = unsafe { windows_sys::Win32::Networking::WinSock::WSAGetLastError() };
+            if err == ERROR_IO_PENDING as _ {
+                Ok(None)
+            } else {
+                Err(std::io::Error::last_os_error())
             }
+        } else {
+            Ok(Some(res as usize))
         }
     }};
 }
@@ -57,11 +63,28 @@ macro_rules! check_win32_error {
     ($res: expr) => {{
         use windows_sys::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
 
-        if ($res) == 0 {
-            let err = unsafe { GetLastError() };
-            if err != ERROR_IO_PENDING {
-                return Err(Error::last_os_error());
+        let res = ($res);
+
+        if res == 0 {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            if err == ERROR_IO_PENDING {
+                Ok(None)
+            } else {
+                Err(std::io::Error::last_os_error())
             }
+        } else {
+            Ok(Some(res as usize))
+        }
+    }};
+}
+
+#[cfg(windows)]
+macro_rules! install_offset {
+    ($overlapped: expr, $offset: expr) => {{
+        let (lo, hi) = crate::ops::split_into_offsets($offset);
+        unsafe {
+            (&mut *$overlapped).Anonymous.Anonymous.Offset = lo;
+            (&mut *$overlapped).Anonymous.Anonymous.OffsetHigh = hi;
         }
     }};
 }
@@ -86,10 +109,10 @@ macro_rules! impl_op {
 
                         match op_data {
                             Entry(ref mut entry) => {
-                                entry.insert(self.uring_entry());
+                                *entry = Some(self.uring_entry());
                             },
                             Polling(ref mut poll) => {
-                                poll.slot.insert(self.polling_function());
+                                poll.slot = Some(self.polling_function());
                                 poll.read = Self::READ;
                                 poll.write = Self::WRITE;
                             }
@@ -99,7 +122,8 @@ macro_rules! impl_op {
                         op_data.read = Self::READ;
                         op_data.write = Self::WRITE;
                     } else if #[cfg(windows)] {
-                        self.win32_start(op_data.overlapped)?;
+                        let res = self.win32_start(op_data.overlapped);
+                        op_data.immediate_result = res.transpose();
                     }
                 }
 
@@ -109,4 +133,18 @@ macro_rules! impl_op {
     }
 }
 
+/// Split into Offset and OffsetHigh
+#[cfg(windows)]
+#[inline]
+fn split_into_offsets(offset: isize) -> (u32, u32) {
+    let offset = offset as u64;
+    let offset_high = (offset >> 32) as u32;
+    let offset_low = (offset & 0xffffffff) as u32;
+    (offset_low, offset_high)
+}
+
 mod read;
+pub use read::Read;
+
+mod write;
+pub use write::Write;

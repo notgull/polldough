@@ -26,9 +26,10 @@ macro_rules! lock {
 // modules
 
 mod buf;
-pub use buf::{Buf, BufMut, OwnedIoSlice};
+pub use buf::{Buf, BufMut, IoBuf, IoBufMut, OwnedIoSlice, VectoredBuf, VectoredBufMut};
 
 mod ops;
+pub use ops::*;
 
 #[cfg(unix)]
 mod polling;
@@ -52,9 +53,7 @@ cfg_if::cfg_if! {
 }
 
 mod source;
-pub use source::{Raw, Source, SourceType};
-
-use ops::Op;
+pub use source::{AsSource, Raw, Source, SourceType};
 use std::{fmt, io::Result, time::Duration};
 
 #[doc(hidden)]
@@ -65,8 +64,21 @@ type PollingFn = Box<dyn FnMut() -> Result<usize> + Send + Sync + 'static>;
 /// The events output from waiting.
 #[derive(Debug)]
 pub struct Event {
-    key: u64,
-    result: Result<usize>,
+    pub key: u64,
+    pub result: Result<usize>,
+}
+
+/// When submitting an event, there is a chance that it completes
+/// before the event is submitted.
+///
+/// This enum distinguishes between whether the operation completed
+/// during the submission or if it was logged into the queue.
+#[derive(Debug)]
+pub enum SubmissionStatus {
+    /// The operation completed before the event was submitted.
+    AlreadyComplete(Result<usize>),
+    /// The operation was submitted into the queue.
+    Submitted,
 }
 
 /// The interface to system faculties for polling for completion on
@@ -102,7 +114,7 @@ impl Completion {
     /// # Safety
     ///
     /// Cannot submit the same `op` more than once.
-    pub unsafe fn submit(&self, op: &mut impl Op, key: u64) -> Result<()> {
+    pub unsafe fn submit(&self, op: &mut impl Op, key: u64) -> Result<SubmissionStatus> {
         self.inner.submit(op, key)
     }
 
@@ -122,4 +134,9 @@ impl From<platform::Completion> for Completion {
     fn from(inner: platform::Completion) -> Self {
         Completion { inner }
     }
+}
+
+fn _test_reactor_send_and_sync() {
+    fn _inner<T: Send + Sync>() {}
+    _inner::<Completion>();
 }

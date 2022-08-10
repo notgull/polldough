@@ -17,7 +17,7 @@ use std::convert::TryInto;
 #[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::WSABUF;
 
-/// An owned version of an `IoVec`.
+/// An owned version of an `IoSlice`.
 #[repr(transparent)]
 pub struct OwnedIoSlice(Sys);
 
@@ -94,6 +94,36 @@ impl OwnedIoSlice {
             }
         }
     }
+
+    /// Convert this `OwnedIoSlice` into a `Box<[u8]>`.
+    ///
+    /// # Safety
+    ///
+    /// May only be called once. After this is called, the
+    /// `OwnedIoSlice` is considered to be invalid.
+    unsafe fn to_boxed_slice(&self) -> Box<[u8]> {
+        cfg_if! {
+            if #[cfg(windows)] {
+                let ptr = self.0.buf.buf as *mut u8;
+                let len = self.0.buf.buf as usize;
+                Box::from_raw(ptr::slice_from_raw_parts_mut(ptr, len))
+            } else if #[cfg(unix)] {
+                let ptr = self.0.buf.iov_base as *mut u8;
+                let len: usize = self.0.buf.iov_len;
+                Box::from_raw(ptr::slice_from_raw_parts_mut(ptr, len))
+            } else {
+                ptr::read(&self.0.buf)
+            }
+        }
+    }
+
+    /// Convert this `OwnedIoSlice` into a `Box<[u8]>`.
+    pub fn into_boxed_slice(self) -> Box<[u8]> {
+        // SAFETY: only called once, since we suppress destructor
+        let b = unsafe { self.to_boxed_slice() };
+        mem::forget(self);
+        b
+    }
 }
 
 impl From<Box<[u8]>> for OwnedIoSlice {
@@ -105,6 +135,18 @@ impl From<Box<[u8]>> for OwnedIoSlice {
 impl From<Vec<u8>> for OwnedIoSlice {
     fn from(v: Vec<u8>) -> Self {
         Self::from(v.into_boxed_slice())
+    }
+}
+
+impl From<OwnedIoSlice> for Box<[u8]> {
+    fn from(o: OwnedIoSlice) -> Self {
+        o.into_boxed_slice()
+    }
+}
+
+impl From<OwnedIoSlice> for Vec<u8> {
+    fn from(o: OwnedIoSlice) -> Self {
+        o.into_boxed_slice().into_vec()
     }
 }
 
@@ -183,20 +225,8 @@ impl DerefMut for OwnedIoSlice {
 
 impl Drop for OwnedIoSlice {
     fn drop(&mut self) {
-        cfg_if! {
-            if #[cfg(windows)] {
-                let ptr = self.0.buf.buf as *mut u8;
-                let len = self.0.buf.buf as usize;
-                mem::drop(
-                    unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(ptr, len)) }
-                )
-            } else if #[cfg(unix)] {
-                let ptr = self.0.buf.iov_base as *mut u8;
-                let len: usize = self.0.buf.iov_len;
-                mem::drop(
-                    unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(ptr, len)) }
-                )
-            }
-        }
+        // SAFETY: only called once
+        #[cfg(any(unix, windows))]
+        mem::drop(unsafe { self.to_boxed_slice() });
     }
 }

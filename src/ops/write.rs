@@ -1,7 +1,7 @@
 // GNU GPL v3 License
 
 use super::split_nonnull;
-use crate::{BufMut, PollingFn, Raw, Source, SourceType};
+use crate::{Buf, PollingFn, Raw, Source, SourceType};
 use std::io::Result;
 
 #[cfg(windows)]
@@ -11,18 +11,18 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-/// Read in data from a source to a buffer.
-pub struct Read<B> {
+/// Write data from a buffer to a source.
+pub struct Write<B> {
     source: Raw,
     variant: SourceType,
     buf: B,
     offset: i64,
 }
 
-impl<B: BufMut> Read<B> {
+impl<B: Buf> Write<B> {
     /// Create a new `Read` from the source and a buffer to read into.
     pub fn new<S: Source>(source: &S, buf: B) -> Self {
-        Read {
+        Write {
             source: source.as_raw(),
             variant: S::SOURCE_TYPE,
             buf,
@@ -64,11 +64,11 @@ impl<B: BufMut> Read<B> {
                     seeked = true;
                 }
 
-                let n = syscall!(read(source, ptr.0.as_ptr().cast(), len))?;
+                let n = syscall!(write(source, ptr.0.as_ptr().cast(), len))?;
                 Ok(n as _)
             }),
             SourceType::Socket => Box::new(move || {
-                let n = syscall!(read(source, ptr.0.as_ptr().cast(), len))?;
+                let n = syscall!(write(source, ptr.0.as_ptr().cast(), len))?;
                 Ok(n as _)
             }),
         }
@@ -84,7 +84,7 @@ impl<B: BufMut> Read<B> {
         use io_uring::types::Fd;
 
         let (ptr, len) = split_nonnull(self.buf.pointer());
-        let mut read = io_uring::opcode::Read::new(Fd(self.source), ptr.as_ptr().cast(), len as _);
+        let mut read = io_uring::opcode::Write::new(Fd(self.source), ptr.as_ptr().cast(), len as _);
 
         if matches!(self.variant, SourceType::File) {
             read = read.offset(self.offset);
@@ -95,12 +95,10 @@ impl<B: BufMut> Read<B> {
 
     #[cfg(windows)]
     fn win32_start(&mut self, overlapped: *mut OVERLAPPED) -> Result<Option<usize>> {
-        use std::mem::MaybeUninit;
-
         let (ptr, len) = split_nonnull(self.buf.pointer());
         match self.variant {
             SourceType::Socket => {
-                let buf = WSABUF {
+                let mut buf = WSABUF {
                     len: len as _,
                     buf: ptr.as_ptr() as _,
                 };
@@ -108,7 +106,7 @@ impl<B: BufMut> Read<B> {
                 let mut flags = 0;
 
                 check_socket_error!(unsafe {
-                    windows_sys::Win32::Networking::WinSock::WSARecv(
+                    windows_sys::Win32::Networking::WinSock::WSASend(
                         self.source as _,
                         &buf,
                         1,
@@ -124,7 +122,7 @@ impl<B: BufMut> Read<B> {
 
                 install_offset!(overlapped, self.offset);
                 check_win32_error!(unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
+                    windows_sys::Win32::Storage::FileSystem::WriteFile(
                         self.source as _,
                         ptr.as_ptr() as _,
                         len as _,
@@ -138,5 +136,5 @@ impl<B: BufMut> Read<B> {
 }
 
 impl_op! {
-    <B: BufMut> Read
+    <B: Buf> Write
 }

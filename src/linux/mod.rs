@@ -52,7 +52,7 @@ impl Completion {
         defer!(self.deregister(source))
     }
 
-    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<()> {
+    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<crate::SubmissionStatus> {
         defer!(self.submit(op, key))
     }
 

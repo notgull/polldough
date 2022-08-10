@@ -2,7 +2,7 @@
 
 use std::{
     io::{IoSlice, IoSliceMut},
-    ops::{Bound, Deref, DerefMut, RangeBounds},
+    ops::{Bound, RangeBounds},
     ptr::NonNull,
 };
 
@@ -60,9 +60,39 @@ pub unsafe trait Buf: 'static {
     }
 }
 
-unsafe impl<T: Deref<Target = [u8]> + 'static> Buf for T {
+unsafe impl Buf for &'static [u8] {
+    fn pointer(&self) -> NonNull<[u8]> {
+        NonNull::from(*self)
+    }
+}
+unsafe impl Buf for &'static mut [u8] {
     fn pointer(&self) -> NonNull<[u8]> {
         NonNull::from(&**self)
+    }
+}
+unsafe impl Buf for IoSlice<'static> {
+    fn pointer(&self) -> NonNull<[u8]> {
+        NonNull::from(self.as_ref())
+    }
+}
+unsafe impl Buf for IoSliceMut<'static> {
+    fn pointer(&self) -> NonNull<[u8]> {
+        NonNull::from(self.as_ref())
+    }
+}
+unsafe impl Buf for Vec<u8> {
+    fn pointer(&self) -> NonNull<[u8]> {
+        NonNull::from(self.as_slice())
+    }
+}
+unsafe impl Buf for Box<[u8]> {
+    fn pointer(&self) -> NonNull<[u8]> {
+        NonNull::from(&**self)
+    }
+}
+unsafe impl Buf for OwnedIoSlice {
+    fn pointer(&self) -> NonNull<[u8]> {
+        NonNull::from(self.as_ref())
     }
 }
 
@@ -73,7 +103,10 @@ unsafe impl<T: Deref<Target = [u8]> + 'static> Buf for T {
 /// The `pointer` returned by this buffer may be used mutably.
 pub unsafe trait BufMut: Buf {}
 
-unsafe impl<T: DerefMut<Target = [u8]> + 'static> BufMut for T {}
+unsafe impl BufMut for &'static mut [u8] {}
+unsafe impl BufMut for IoSliceMut<'static> {}
+unsafe impl BufMut for Vec<u8> {}
+unsafe impl BufMut for OwnedIoSlice {}
 
 /// A buffer type that is ABI compatible with `std::io::IoSlice`.
 ///
@@ -98,28 +131,6 @@ pub unsafe trait IoBufMut: BufMut + IoBuf {}
 unsafe impl IoBufMut for IoSliceMut<'static> {}
 unsafe impl IoBufMut for OwnedIoSlice {}
 
-// Internal use trait for a slice of I/O bufs.
-#[doc(hidden)]
-pub unsafe trait IoBufSlice {
-    type Item: IoBuf;
-    fn slice_ptr(&self) -> &[Self::Item];
-}
-#[doc(hidden)]
-pub unsafe trait IoBufSliceMut: IoBufSlice {
-    fn slice_ptr_mut(&mut self) -> &mut [Self::Item];
-}
-unsafe impl<Item: IoBuf> IoBufSlice for [Item] {
-    type Item = Item;
-    fn slice_ptr(&self) -> &[Self::Item] {
-        self
-    }
-}
-unsafe impl<Item: IoBufMut> IoBufSliceMut for [Item] {
-    fn slice_ptr_mut(&mut self) -> &mut [Self::Item] {
-        self
-    }
-}
-
 /// A buffer made up of I/O slices, for vectored I/O.
 ///
 /// # Safety
@@ -131,63 +142,30 @@ pub unsafe trait VectoredBuf {
 
     /// Get the pointer and valid length of this buffer.
     fn pointer(&self) -> NonNull<[Self::InnerBuf]>;
-
-    /// Get a sliced version of this buffer.
-    ///
-    /// Note that the slice indices operate on bytes instead
-    /// of the inner buffers.
-    fn slice(self, bounds: impl RangeBounds<usize>) -> Slice<Self>
-    where
-        Self: Sized,
-    {
-        let bufs = unsafe { &*self.pointer().as_ptr() };
-        let len = bufs
-            .iter()
-            .map(|b| unsafe { &*b.pointer().as_ref() }.len())
-            .fold(0usize, |acc, l| acc.saturating_add(l));
-
-        let start = match bounds.start_bound() {
-            Bound::Unbounded => 0,
-            Bound::Included(&n) => n,
-            Bound::Excluded(&n) => n + 1,
-        };
-
-        let end = match bounds.end_bound() {
-            Bound::Unbounded => len,
-            Bound::Included(&n) => n + 1,
-            Bound::Excluded(&n) => n,
-        };
-
-        assert!(
-            start <= end,
-            "start ({}) must be less than or equal to end ({})",
-            start,
-            end,
-        );
-
-        assert!(
-            end <= len,
-            "end ({}) must be less than or equal to length ({})",
-            end,
-            len,
-        );
-
-        Slice {
-            buf: self,
-            start,
-            end,
-        }
-    }
 }
 
-unsafe impl<T: Deref + 'static> VectoredBuf for T
-where
-    T::Target: IoBufSlice,
-{
-    type InnerBuf = <T::Target as IoBufSlice>::Item;
-
+unsafe impl<T: IoBuf> VectoredBuf for &'static [T] {
+    type InnerBuf = T;
     fn pointer(&self) -> NonNull<[Self::InnerBuf]> {
-        NonNull::from((&**self).slice_ptr())
+        NonNull::from(*self)
+    }
+}
+unsafe impl<T: IoBuf> VectoredBuf for &'static mut [T] {
+    type InnerBuf = T;
+    fn pointer(&self) -> NonNull<[Self::InnerBuf]> {
+        NonNull::from(&**self)
+    }
+}
+unsafe impl<T: IoBuf> VectoredBuf for Vec<T> {
+    type InnerBuf = T;
+    fn pointer(&self) -> NonNull<[Self::InnerBuf]> {
+        NonNull::from(self.as_slice())
+    }
+}
+unsafe impl<T: IoBuf> VectoredBuf for Box<[T]> {
+    type InnerBuf = T;
+    fn pointer(&self) -> NonNull<[Self::InnerBuf]> {
+        NonNull::from(&**self)
     }
 }
 
@@ -198,7 +176,34 @@ where
 /// The pointer must be able to be used mutably.
 pub unsafe trait VectoredBufMut: VectoredBuf {}
 
-unsafe impl<T: DerefMut + 'static> VectoredBufMut for T where T::Target: IoBufSliceMut {}
+unsafe impl<T: IoBufMut> VectoredBufMut for &'static mut [T] {}
+unsafe impl<T: IoBufMut> VectoredBufMut for Vec<T> {}
+unsafe impl<T: IoBufMut> VectoredBufMut for Box<[T]> {}
+
+macro_rules! impl_array {
+    ($($N:expr)+) => {
+        $(
+            unsafe impl Buf for [u8; $N] {
+                fn pointer(&self) -> NonNull<[u8]> {
+                    NonNull::from(self)
+                }
+            }
+            unsafe impl BufMut for [u8; $N] {}
+            unsafe impl<T: IoBuf> VectoredBuf for [T; $N] {
+                type InnerBuf = T;
+                fn pointer(&self) -> NonNull<[Self::InnerBuf]> {
+                    NonNull::from(self)
+                }
+            }
+            unsafe impl<T: IoBufMut> VectoredBufMut for [T; $N] {}
+        )+
+    };
+}
+
+impl_array! {
+    0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+    64 128 256 512 1024 2048 4096 8192 16384 32768 65536 131072 262144 524288 1048576
+}
 
 /// A wrapper around a `Buf` that only returns a specific slice of
 /// the data.

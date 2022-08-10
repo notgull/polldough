@@ -2,10 +2,11 @@
 
 #![cfg(windows)]
 
+use crate::{ops::Op, Event, Source, SubmissionStatus};
 use slab::Slab;
 use std::{
-    collections::HashMap,
     cell::UnsafeCell,
+    collections::HashMap,
     fmt,
     io::{self, Result},
     marker::PhantomData,
@@ -15,13 +16,11 @@ use std::{
     time::Duration,
 };
 use windows_sys::Win32::{
-    Foundation::{HANDLE, INVALID_HANDLE_VALUE},
+    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
     System::IO::{
         CreateIoCompletionPort, PostQueuedCompletionStatus, OVERLAPPED, OVERLAPPED_ENTRY,
     },
 };
-
-use crate::{ops::Op, Event, Source};
 
 const NOTIFY_KEY: u64 = u64::MAX;
 
@@ -30,6 +29,7 @@ const NOTIFY_KEY: u64 = u64::MAX;
 #[doc(hidden)]
 pub struct OpData<'a> {
     pub(crate) overlapped: *mut OVERLAPPED,
+    pub(crate) immediate_result: Option<Result<usize>>,
     _marker: PhantomData<&'a ()>,
 }
 
@@ -158,12 +158,11 @@ impl Completion {
     }
 
     pub(crate) fn deregister(&self, _source: &impl Source) -> Result<()> {
-        // TODO: is there a way of doing this?
-
+        // entirely likely that this doesn't matter
         Ok(())
     }
 
-    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<()> {
+    pub(crate) fn submit(&self, op: &mut impl Op, key: u64) -> Result<SubmissionStatus> {
         // acquire the lock to add a new entry
         let mut _guard = lock!(self.mutation_lock);
         let mut active_ops = unsafe { &mut *self.active_ops.get() };
@@ -190,11 +189,20 @@ impl Completion {
         // from this point on, the operation owns the entry
         let mut op_data = OpData {
             overlapped: &mut entry.overlapped,
+            immediate_result: None,
             _marker: PhantomData,
         };
         op.run(&mut op_data)?;
 
-        Ok(())
+        // the operation may complete immediately; in this case,
+        // we propogate the result upwards
+        Ok(match op_data.immediate_result {
+            Some(result) => SubmissionStatus::AlreadyComplete(result),
+            None => {
+                active_ops.remove(index);
+                SubmissionStatus::Submitted
+            }
+        })
     }
 
     pub(crate) fn wait(&self, timeout: Option<Duration>, out: &mut Vec<Event>) -> Result<usize> {
@@ -283,6 +291,14 @@ impl Completion {
         }
 
         Ok(())
+    }
+}
+
+impl Drop for Completion {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.iocp_port);
+        }
     }
 }
 
