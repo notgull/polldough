@@ -29,7 +29,7 @@ mod buf;
 pub use buf::{Buf, BufMut, IoBuf, IoBufMut, OwnedIoSlice, VectoredBuf, VectoredBufMut};
 
 mod ops;
-pub use ops::*;
+pub use ops::{Op, Read, Write};
 
 #[cfg(unix)]
 mod polling;

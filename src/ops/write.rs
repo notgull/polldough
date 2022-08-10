@@ -136,5 +136,5 @@ impl<B: Buf> Write<B> {
 }
 
 impl_op! {
-    <B: Buf> Write
+    <B: Buf> Write: B
 }

@@ -44,7 +44,7 @@ impl<B: BufMut> Read<B> {
     /// # Safety
     ///
     /// The operation must be complete before the buffer is retrieved.
-    pub unsafe fn into_buf(self) -> B {
+    unsafe fn into_buf(self) -> B {
         self.buf
     }
 
@@ -138,5 +138,5 @@ impl<B: BufMut> Read<B> {
 }
 
 impl_op! {
-    <B: BufMut> Read
+    <B: BufMut> Read: B
 }

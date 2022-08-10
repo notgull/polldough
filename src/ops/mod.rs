@@ -5,19 +5,39 @@ use std::{io::Result, ptr::NonNull};
 
 /// The hidden underlying trait for `Op` that is used to not expose OS-specific
 /// details.
+/// 
+/// This trait is semver-exempt.
+/// 
+/// # Safety
+/// 
+/// This trait is never implemented by any item outside of this crate.
 #[doc(hidden)]
-pub trait OpBase {
+pub unsafe trait OpBase {
     /// Enqueue this function into the completion queue, given an OS-specific
     /// "OpData" object.
     fn run(&mut self, op_data: &mut OpData<'_>) -> Result<()>;
 }
 
 /// An operation that can be enqueued into the completion queue.
-pub trait Op: OpBase {
+/// 
+/// # Safety
+/// 
+/// This is a sealed trait, only implemented on crate-specific types.
+pub unsafe trait Op: OpBase {
+    /// The variables "captured" by this operation, returned at the
+    /// very end.
+    type Captured;
+
     /// The raw file descriptor that this operation is associated with.
     fn source(&self) -> Raw;
     /// The variant of the source.
     fn variant(&self) -> SourceType;
+    /// Get the captured variables.
+    /// 
+    /// # Safety
+    /// 
+    /// The operation must be complete at this point.
+    unsafe fn into_captured(self) -> Self::Captured;
 }
 
 // split a NonNull<[u8]> into ptr and len
@@ -90,8 +110,10 @@ macro_rules! install_offset {
 }
 
 macro_rules! impl_op {
-    (< $($gname: ident: $gbound: ident),* > $name: ident) => {
-        impl<$($gname: $gbound),*> $crate::ops::Op for $name<$($gname),*> {
+    (< $($gname: ident: $gbound: ident),* > $name: ident: $cap: ty) => {
+        unsafe impl<$($gname: $gbound),*> $crate::ops::Op for $name<$($gname),*> {
+            type Captured = $cap;
+
             fn source(&self) -> $crate::Raw {
                 self.source
             }
@@ -99,9 +121,13 @@ macro_rules! impl_op {
             fn variant(&self) -> $crate::SourceType {
                 self.variant
             }
+
+            unsafe fn into_captured(self) -> $cap {
+                self.into_buf()
+            }
         }
 
-        impl<$($gname: $gbound),*> $crate::ops::OpBase for $name<$($gname),*> {
+        unsafe impl<$($gname: $gbound),*> $crate::ops::OpBase for $name<$($gname),*> {
             fn run(&mut self, op_data: &mut $crate::OpData<'_>) -> Result<()> {
                 cfg_if::cfg_if! {
                     if #[cfg(target_os = "linux")] {
